@@ -34,11 +34,18 @@ def health_check():
 @app.route('/api/my-club', methods=['POST'])
 def add_players_to_club():
     """
-    Receive player IDs from userscript and store in my_club collection.
+    Receive player data from userscript and store in my_club collection.
 
     Request body:
     {
-        "player_ea_ids": [123456, 234567, ...]
+        "players": [
+            {
+                "ea_id": 123456,
+                "name": "Cristiano Ronaldo",
+                "untradeable": false
+            },
+            ...
+        ]
     }
 
     Returns:
@@ -46,61 +53,136 @@ def add_players_to_club():
         "success": true,
         "count": 150,
         "total_players": 150,
+        "new_players": 10,
+        "updated_players": 140,
         "message": "Successfully processed 150 players in your club"
     }
     """
     try:
         data = request.get_json()
 
-        if not data or 'player_ea_ids' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing player_ea_ids in request body'
-            }), 400
+        # Support both old and new format for backward compatibility
+        if data and 'players' in data:
+            # New format with full player data
+            players = data['players']
 
-        player_ids = data['player_ea_ids']
+            if not isinstance(players, list):
+                return jsonify({
+                    'success': False,
+                    'error': 'players must be an array'
+                }), 400
 
-        if not isinstance(player_ids, list):
-            return jsonify({
-                'success': False,
-                'error': 'player_ea_ids must be an array'
-            }), 400
+            if not players:
+                return jsonify({
+                    'success': True,
+                    'count': 0,
+                    'total_players': 0,
+                    'new_players': 0,
+                    'updated_players': 0,
+                    'message': 'No players to process'
+                })
 
-        # Remove duplicates
-        unique_player_ids = list(set(player_ids))
+            # Validate player objects
+            for player in players:
+                if not isinstance(player, dict) or 'ea_id' not in player:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Each player must have an ea_id field'
+                    }), 400
 
-        if not unique_player_ids:
+            # Remove duplicates by ea_id (keep last occurrence)
+            unique_players = {player['ea_id']: player for player in players}.values()
+
+            # Bulk upsert to MongoDB
+            operations = [
+                UpdateOne(
+                    {'player_ea_id': player['ea_id']},
+                    {
+                        '$set': {
+                            'player_ea_id': player['ea_id'],
+                            'name': player.get('name', 'Unknown Player'),
+                            'untradeable': player.get('untradeable', False)
+                        },
+                        '$setOnInsert': {
+                            'acquisition_date': None
+                        }
+                    },
+                    upsert=True
+                )
+                for player in unique_players
+            ]
+
+            result = my_club_collection.bulk_write(operations, ordered=False)
+
+            # Get statistics
+            total_players = my_club_collection.count_documents({})
+            processed_count = len(unique_players)
+            new_players = result.upserted_count
+            updated_players = result.modified_count
+
             return jsonify({
                 'success': True,
-                'count': 0,
-                'total_players': 0,
-                'message': 'No players to process'
+                'count': processed_count,
+                'total_players': total_players,
+                'new_players': new_players,
+                'updated_players': updated_players,
+                'message': f'Successfully processed {processed_count} players in your club'
             })
 
-        # Bulk upsert to MongoDB
-        operations = [
-            UpdateOne(
-                {'player_ea_id': player_id},
-                {'$set': {'player_ea_id': player_id}},
-                upsert=True
-            )
-            for player_id in unique_player_ids
-        ]
+        elif data and 'player_ea_ids' in data:
+            # Old format - maintain backward compatibility
+            player_ids = data['player_ea_ids']
 
-        result = my_club_collection.bulk_write(operations, ordered=False)
+            if not isinstance(player_ids, list):
+                return jsonify({
+                    'success': False,
+                    'error': 'player_ea_ids must be an array'
+                }), 400
 
-        # Get total count
-        total_players = my_club_collection.count_documents({})
+            unique_player_ids = list(set(player_ids))
 
-        # Count how many were actually processed (new + existing)
-        processed_count = len(unique_player_ids)
+            if not unique_player_ids:
+                return jsonify({
+                    'success': True,
+                    'count': 0,
+                    'total_players': 0,
+                    'message': 'No players to process'
+                })
 
-        return jsonify({
-            'success': True,
-            'count': processed_count,
-            'total_players': total_players,
-            'message': f'Successfully processed {processed_count} players in your club'
-        })
+            operations = [
+                UpdateOne(
+                    {'player_ea_id': player_id},
+                    {
+                        '$set': {
+                            'player_ea_id': player_id
+                        },
+                        '$setOnInsert': {
+                            'name': None,
+                            'untradeable': None,
+                            'acquisition_date': None
+                        }
+                    },
+                    upsert=True
+                )
+                for player_id in unique_player_ids
+            ]
+
+            result = my_club_collection.bulk_write(operations, ordered=False)
+            total_players = my_club_collection.count_documents({})
+            processed_count = len(unique_player_ids)
+
+            return jsonify({
+                'success': True,
+                'count': processed_count,
+                'total_players': total_players,
+                'message': f'Successfully processed {processed_count} players in your club'
+            })
+
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Missing players or player_ea_ids in request body'
+            }), 400
 
     except Exception as e:
         return jsonify({
@@ -117,15 +199,82 @@ def get_club_stats():
     Returns:
     {
         "success": true,
-        "total_players": 150
+        "total_players": 150,
+        "tradeable_players": 80,
+        "untradeable_players": 70
     }
     """
     try:
         total_players = my_club_collection.count_documents({})
+        tradeable_players = my_club_collection.count_documents({'untradeable': False})
+        untradeable_players = my_club_collection.count_documents({'untradeable': True})
 
         return jsonify({
             'success': True,
-            'total_players': total_players
+            'total_players': total_players,
+            'tradeable_players': tradeable_players,
+            'untradeable_players': untradeable_players
+        })
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/my-club/value', methods=['GET'])
+def get_club_value():
+    """
+    Calculate total market value of tradeable players.
+
+    Returns:
+    {
+        "success": true,
+        "total_value": 1500000,
+        "tradeable_value": 800000,
+        "tradeable_count": 50,
+        "untradeable_count": 100,
+        "players_with_prices": 45,
+        "players_without_prices": 5
+    }
+    """
+    try:
+        players_collection = db['players']
+
+        # Get all owned tradeable players
+        tradeable_owned = list(my_club_collection.find({'untradeable': False}))
+        untradeable_owned = list(my_club_collection.find({'untradeable': True}))
+
+        tradeable_ids = [doc['player_ea_id'] for doc in tradeable_owned]
+
+        # Get prices from players collection
+        tradeable_players = list(players_collection.find(
+            {'ea_id': {'$in': tradeable_ids}},
+            {'ea_id': 1, 'name': 1, 'market_price': 1}
+        ))
+
+        # Calculate total value
+        total_value = 0
+        players_with_prices = 0
+        players_without_prices = 0
+
+        for player in tradeable_players:
+            price = player.get('market_price')
+            if price is not None and price > 0:
+                total_value += price
+                players_with_prices += 1
+            else:
+                players_without_prices += 1
+
+        return jsonify({
+            'success': True,
+            'total_value': total_value,
+            'tradeable_value': total_value,
+            'tradeable_count': len(tradeable_owned),
+            'untradeable_count': len(untradeable_owned),
+            'players_with_prices': players_with_prices,
+            'players_without_prices': players_without_prices
         })
 
     except Exception as e:
@@ -177,6 +326,7 @@ def main():
     print(f"  GET    http://{host}:{port}/health")
     print(f"  POST   http://{host}:{port}/api/my-club")
     print(f"  GET    http://{host}:{port}/api/my-club/stats")
+    print(f"  GET    http://{host}:{port}/api/my-club/value")
     print(f"  DELETE http://{host}:{port}/api/my-club/clear")
     print("\nReady to receive player data from userscript!")
     print("=" * 60)

@@ -113,7 +113,7 @@ def main():
     parser.add_argument(
         '--max-iterations',
         type=int,
-        default=50,
+        default=35,
         help='Maximum optimization iterations (default: 20)'
     )
 

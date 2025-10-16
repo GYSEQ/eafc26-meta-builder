@@ -43,14 +43,20 @@ def _ensure_indexes():
     # players collection indexes
     players = _db['players']
     players.create_index('ea_id', unique=True)
-    players.create_index([('metarating_position', ASCENDING), ('metarating', DESCENDING)])
     players.create_index('club_ea_id')
     players.create_index('league_ea_id')
     players.create_index('nation_ea_id')
 
+    # NEW: Create indexes for metaratings per position
+    # These enable fast queries like: metaratings.ST.score >= 80
+    positions = ['GK', 'CB', 'LB', 'RB', 'LWB', 'RWB', 'CDM', 'CM', 'CAM', 'LM', 'RM', 'LW', 'RW', 'ST', 'CF', 'LF', 'RF']
+    for position in positions:
+        players.create_index(f'metaratings.{position}.score', name=f'idx_meta_{position}')
+
     # my_club collection indexes
     my_club = _db['my_club']
     my_club.create_index('player_ea_id', unique=True)
+    my_club.create_index('untradeable')  # For filtering by tradeable status
 
     print("All indexes created successfully")
 

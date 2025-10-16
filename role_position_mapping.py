@@ -36,7 +36,7 @@ ROLE_TO_POSITION = {
     52: 'LM',  # HIGH (Plus++ match), 60.0% match
     53: 'RW',  # HIGH (Plus++ match), 51.1% match
     54: 'RW',  # HIGH (Plus++ match), 50.0% match
-    55: 'CAM',  # HIGH (Plus++ match), 35.7% match
+    55: 'RW',  # HIGH (Plus++ match), 35.7% match
     56: 'LW',  # HIGH (Plus++ match), 57.3% match
     57: 'LW',  # HIGH (Plus++ match), 73.7% match
     58: 'LW',  # HIGH (Plus++ match), 61.0% match

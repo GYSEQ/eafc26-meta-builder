@@ -9,7 +9,6 @@ An advanced squad optimization tool for EA Sports FC 26 Ultimate Team that uses 
 - **Chemistry System**: Full EA FC 26 squad-threshold chemistry implementation
 - **CP-SAT Optimization**: Uses Google OR-Tools for constraint programming with chemistry as a hard constraint
 - **Performance Tuning**: Configurable candidate limits and minimum metarating filters
-- **Formation Support**: Multiple formations with proper position adjacency
 
 ## Architecture
 
@@ -25,7 +24,7 @@ The application consists of three independent components:
 │    Scraper      │─────▶│    MongoDB       │
 └─────────────────┘      │  - players       │
                          │  - my_club       │
-┌─────────────────┐      │  - formations    │
+┌─────────────────┐      │                  │
 │  EA FC Web App  │      └────────┬─────────┘
 └────────┬────────┘               │
          │                        │
@@ -168,20 +167,20 @@ Build squads using the optimizer:
 ```bash
 # Basic 4-3-3 squad with 100k budget
 python -m optimizer.main \
-  --formation "4-3-3 (4)" \
+  --positions "GK,RB,CB,CB,LB,CDM,CDM,CAM,RM,ST,LM" \
   --budget 100000 \
   --min-chemistry 25
 
 # Use only owned players
 python -m optimizer.main \
-  --formation "4-3-3 (4)" \
+  --positions "GK,RB,CB,CB,LB,CDM,CDM,CAM,RM,ST,LM" \
   --budget 0 \
   --owned-only \
   --min-chemistry 20
 
 # Fast optimization with filters
 python -m optimizer.main \
-  --formation "4-2-3-1 (2)" \
+  --positions "GK,RB,CB,CB,LB,CDM,CDM,CAM,RM,ST,LM" \
   --budget 500000 \
   --min-chemistry 30 \
   --candidate-limit 50 \
@@ -198,7 +197,7 @@ python -m optimizer.main [OPTIONS]
 
 #### Required Arguments
 
-- `--formation` - Formation name (e.g., "4-3-3 (4)", "4-4-2", "4-2-3-1 (2)")
+- `--positions` "GK,RB,CB,CB,LB,CDM,CDM,CAM,RM,ST,LM"
 - `--budget` - Maximum budget in coins
 
 #### Optional Arguments
@@ -609,8 +608,7 @@ FUT BUILDER V2/
 ├── utils/
 │   └── position_mappings.py  # Position ID to code mappings
 ├── requirements.txt          # Python dependencies
-├── .env.example              # Example environment config
-├── MIGRATION_GUIDE.md        # Rebuild documentation
+├── .env              # environment config
 └── README.md                 # This file
 ```
 
@@ -689,8 +687,7 @@ This project is for educational and personal use only.
 
 For issues or questions:
 1. Check the [Troubleshooting](#troubleshooting) section
-2. Review the [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for technical details
-3. Check your Python and MongoDB installations
+2. Check your Python and MongoDB installations
 
 ---
 

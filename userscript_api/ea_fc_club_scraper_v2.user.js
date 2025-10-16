@@ -169,13 +169,32 @@
 
             console.log(`[Squad Builder] Found ${players.length} players`);
 
-            // Extract definitionIds (EA player IDs)
-            const playerIds = players
-                .filter(p => p && p.definitionId)
-                .map(p => p.definitionId);
+            // Debug: Log first player's properties to understand structure
+            if (players.length > 0) {
+                console.log('[Squad Builder] Sample player object keys:', Object.keys(players[0]));
+                console.log('[Squad Builder] Sample player full object:', players[0]);
+            }
 
-            console.log(`[Squad Builder] Sending ${playerIds.length} player IDs to API...`);
-            showNotification(`Sending ${playerIds.length} players to Squad Builder...`, 'info');
+            // Extract player data including ID, name, and untradeable status
+            const playerData = players
+                .filter(p => p && p.definitionId)
+                .map(p => {
+                    // EA uses 'tradable' (note spelling), untradeableCount, loans, and state
+                    const isUntradeable = p.tradable === false ||
+                                         (p.untradeableCount !== undefined && p.untradeableCount > 0) ||
+                                         (p.loans !== undefined && p.loans > 0 && p.loans !== -1) ||
+                                         (p.state && p.state !== 'free');
+
+                    return {
+                        ea_id: p.definitionId,
+                        name: p._staticData?.name || 'Unknown Player',
+                        untradeable: isUntradeable
+                    };
+                });
+
+            console.log(`[Squad Builder] Sending ${playerData.length} players to API...`);
+            console.log('[Squad Builder] Sample player data:', playerData.slice(0, 3));
+            showNotification(`Sending ${playerData.length} players to Squad Builder...`, 'info');
 
             // Send to local API
             GM_xmlhttpRequest({
@@ -185,7 +204,7 @@
                     'Content-Type': 'application/json'
                 },
                 data: JSON.stringify({
-                    player_ea_ids: playerIds
+                    players: playerData
                 }),
                 onload: function(response) {
                     try {

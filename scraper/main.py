@@ -1,6 +1,7 @@
 """Main scraper script for importing players from fut.gg."""
 import argparse
 import sys
+import asyncio
 from typing import List, Dict
 from tqdm import tqdm
 from pymongo import UpdateOne
@@ -21,15 +22,14 @@ class PlayerScraper:
         """
         Scrape players from fut.gg and store in MongoDB.
 
-        Per Migration Guide:
-        - Simplified schema (no position fields, only EA IDs)
-        - Single best metarating per player
-        - Store metarating_position (position code)
+        New schema:
+        - metaratings: {position: {score}}
+        - No backward compatibility fields
 
         Args:
             max_pages: Maximum number of pages to scrape (None for all)
         """
-        print("Starting player scraper...")
+        print("Starting player scraper with async metarating fetching...")
         print(f"Max pages: {max_pages if max_pages else 'All'}")
 
         page = 1
@@ -72,33 +72,32 @@ class PlayerScraper:
 
             total_players_processed += len(parsed_players)
 
-            # Fetch metaratings in bulk for all players on this page
-            if ea_ids:
+            # Fetch metaratings asynchronously for all players on this page
+            if parsed_players:
                 try:
-                    meta_response = self.service.fetch_metaratings_bulk(ea_ids)
+                    # Run async metarating fetch with full player data
+                    # This allows filtering by player's actual positions
+                    metaratings_by_id = asyncio.run(
+                        self.service.fetch_metaratings_async(parsed_players)
+                    )
 
-                    if meta_response:
-                        # Handle both 'data' and 'items' response formats
-                        meta_items = meta_response.get('data') or meta_response.get('items', [])
+                    # Assign metaratings to players
+                    for player_data in parsed_players:
+                        ea_id = player_data['ea_id']
+                        if ea_id in metaratings_by_id:
+                            player_data['metaratings'] = metaratings_by_id[ea_id]
+                        else:
+                            player_data['metaratings'] = {}
 
-                        # Create a mapping of ea_id to (score, position_code)
-                        meta_by_id = {}
-                        for meta_item in meta_items:
-                            ea_id, score, position_code = self.service.parse_metarating(meta_item)
-                            if ea_id:
-                                meta_by_id[ea_id] = (score, position_code)
-
-                        # Assign metaratings to players
-                        for player_data in parsed_players:
-                            ea_id = player_data['ea_id']
-                            if ea_id in meta_by_id:
-                                score, position_code = meta_by_id[ea_id]
-                                player_data['metarating'] = score
-                                player_data['metarating_position'] = position_code
+                        # Remove temporary field
+                        player_data.pop('all_positions', None)
 
                 except Exception as e:
-                    # If bulk fetch fails, continue with 0 metarating
+                    # If fetch fails, continue with empty metaratings
                     print(f"\n  Warning: Failed to fetch metaratings for page {page}: {e}")
+                    for player_data in parsed_players:
+                        player_data['metaratings'] = {}
+                        player_data.pop('all_positions', None)
 
             # Bulk upsert to MongoDB
             if parsed_players:
@@ -139,35 +138,44 @@ class PlayerScraper:
         """Print database statistics."""
         total_players = self.players_collection.count_documents({})
         players_with_meta = self.players_collection.count_documents({
-            'metarating': {'$gt': 0}
+            'metaratings': {'$exists': True, '$ne': {}}
         })
 
         print("\n=== Database Statistics ===")
         print(f"Total players: {total_players:,}")
         print(f"Players with metaratings: {players_with_meta:,}")
 
-        # Count by metarating_position
-        pipeline = [
-            {'$match': {'metarating_position': {'$ne': None}}},
-            {'$group': {'_id': '$metarating_position', 'count': {'$sum': 1}}},
-            {'$sort': {'count': -1}}
-        ]
-        position_counts = list(self.players_collection.aggregate(pipeline))
+        # Count players by available positions
+        print("\nPlayers by position (from metaratings):")
+        positions = ['GK', 'CB', 'LB', 'RB', 'LWB', 'RWB', 'CDM', 'CM', 'CAM', 'LM', 'RM', 'LW', 'RW', 'ST', 'CF', 'LF', 'RF']
 
-        if position_counts:
-            print("\nPlayers by metarating position:")
-            for item in position_counts[:15]:
-                print(f"  {item['_id']}: {item['count']:,}")
+        for position in positions:
+            count = self.players_collection.count_documents({
+                f'metaratings.{position}': {'$exists': True}
+            })
+            if count > 0:
+                print(f"  {position}: {count:,}")
 
-        # Show top rated players
-        print("\nTop 10 players by metarating:")
-        top_players = self.players_collection.find(
-            {'metarating': {'$gt': 0}},
-            {'name': 1, 'metarating': 1, 'metarating_position': 1, '_id': 0}
-        ).sort('metarating', -1).limit(10)
+        # Show top rated players per major position
+        print("\nTop 5 players per position:")
+        major_positions = ['GK', 'CB', 'CDM', 'CM', 'CAM', 'ST']
 
-        for player in top_players:
-            print(f"  {player.get('name', 'Unknown'):30} {player.get('metarating', 0):5.1f}  ({player.get('metarating_position', '?')})")
+        for position in major_positions:
+            pipeline = [
+                {'$match': {f'metaratings.{position}': {'$exists': True}}},
+                {'$project': {
+                    'name': 1,
+                    'score': f'$metaratings.{position}.score'
+                }},
+                {'$sort': {'score': -1}},
+                {'$limit': 5}
+            ]
+
+            top_players = list(self.players_collection.aggregate(pipeline))
+            if top_players:
+                print(f"\n  {position}:")
+                for player in top_players:
+                    print(f"    {player.get('name', 'Unknown'):30} {player.get('score', 0):5.1f}")
 
 
 def main():

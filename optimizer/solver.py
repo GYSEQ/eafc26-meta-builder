@@ -39,8 +39,10 @@ class SquadOptimizer:
         """
         Get eligible player candidates for a position.
 
+        NEW: Uses metaratings.{position}.score field
+
         Args:
-            position: Position code
+            position: Position code (e.g., 'ST', 'CM')
             owned_player_ids: Set of owned player IDs
             owned_only: Only return owned players
             limit: Maximum number of candidates (optimization: lower = faster)
@@ -50,10 +52,9 @@ class SquadOptimizer:
         players = self.db['players']
         include_players = include_players or set()
 
-        # Build query - include required players OR meet normal criteria
+        # Build query - must have metarating for this specific position
         base_query = {
-            'metarating_position': position,
-            'metarating': {'$gte': max(min_metarating, 0.01)}
+            f'metaratings.{position}.score': {'$gte': max(min_metarating, 0.01)}
         }
 
         if owned_only:
@@ -65,7 +66,7 @@ class SquadOptimizer:
                 '$or': [
                     base_query,
                     {
-                        'metarating_position': position,
+                        f'metaratings.{position}': {'$exists': True},
                         'ea_id': {'$in': list(include_players)}
                     }
                 ]
@@ -75,15 +76,20 @@ class SquadOptimizer:
 
         candidates = list(
             players.find(query)
-            .sort('metarating', -1)
+            .sort(f'metaratings.{position}.score', -1)
             .limit(limit + len(include_players))  # Increase limit to ensure we get required players
         )
 
-        # Filter and set prices
+        # Filter and set prices, extract position-specific metarating
         valid_candidates = []
         for player in candidates:
             player['is_owned'] = player['ea_id'] in owned_player_ids
             player['is_required'] = player['ea_id'] in include_players
+
+            # Extract position-specific metarating score
+            metaratings = player.get('metaratings', {})
+            position_meta = metaratings.get(position, {})
+            player['metarating'] = position_meta.get('score', 0.0)
 
             if player['is_owned']:
                 # Owned players always have price 0
@@ -231,8 +237,9 @@ class SquadOptimizer:
             model.AddExactlyOne([x[pos_idx, cand_idx] for cand_idx in range(len(candidates[pos_idx]))])
 
         # =================================================================
-        # CONSTRAINT 2: Unique players
+        # CONSTRAINT 2: Unique players (by EA ID and by Name)
         # =================================================================
+        # Prevent same EA ID (same exact card)
         player_positions = {}
         for pos_idx in range(11):
             for cand_idx, player in enumerate(candidates[pos_idx]):
@@ -244,6 +251,26 @@ class SquadOptimizer:
         for ea_id, pos_list in player_positions.items():
             if len(pos_list) > 1:
                 model.Add(sum([x[pos_idx, cand_idx] for pos_idx, cand_idx in pos_list]) <= 1)
+
+        # Prevent same player name (different versions/cards)
+        player_names = {}
+        for pos_idx in range(11):
+            for cand_idx, player in enumerate(candidates[pos_idx]):
+                name = player.get('name', '').strip().lower()
+                if name and name != 'unknown':
+                    if name not in player_names:
+                        player_names[name] = []
+                    player_names[name].append((pos_idx, cand_idx))
+
+        duplicate_names_count = 0
+        for name, pos_list in player_names.items():
+            if len(pos_list) > 1:
+                # Only one version of this player can be selected
+                model.Add(sum([x[pos_idx, cand_idx] for pos_idx, cand_idx in pos_list]) <= 1)
+                duplicate_names_count += 1
+
+        if duplicate_names_count > 0:
+            print(f"  Added uniqueness constraints for {duplicate_names_count} players with multiple cards")
 
         # =================================================================
         # CONSTRAINT 3: Required players must be selected
